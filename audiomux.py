@@ -11,6 +11,7 @@ import os
 import re
 import sys
 import random
+import datetime
 
 from time import sleep
 from pathlib import Path
@@ -29,6 +30,9 @@ THREADS = int(len(os.sched_getaffinity(0))/2)
 
 logger = logging.getLogger(SECTION)
 
+# DEFINE PATHS HERE IN GIVEN FORMAT.
+# Uses current dir as base path so be careful.
+
 pod_path = Path(Path.cwd()) / "data" / "napoleon" / "pod"
 edit_path = Path(Path.cwd()) / "data" / "napoleon" / "editted"
 out_path = Path(Path.cwd()) / "data" / "napoleon" / "out"
@@ -37,7 +41,7 @@ def pool_extract():
     """
     Multi proc function to quickly process multiple tracks.
     """
-    
+
     files = sorted(os.listdir(pod_path))
 
     with Pool(THREADS) as proc:
@@ -60,6 +64,27 @@ def convert_to_seconds(time):
     seconds = [times[i]*modifier[i] for i in range(len(times))]
 
     return sum(seconds)
+
+def convert_to_humanreadable(time):
+    """
+    Convert time in seconds to human readable.
+
+    Args:
+        time (int or str): Send time in seconds.
+
+    Returns:
+        str: returns in format d days, hh:mm:ss
+    """
+
+    time = datetime.timedelta(seconds=float(time))
+
+    # Going on a small detour here to reduce microseconds to only 3 places.
+    time = str(time).split(".")
+
+    if len(time) == 2:
+        time[1] = time[1][:-3]
+
+    return ".".join(time)
 
 def find_tracks():
 
@@ -105,7 +130,7 @@ def find_tracks():
     tracks = re.findall(pattern, timestamps, re.MULTILINE)
 
     for track in tracks:
-        print(f"{track[0]} : {convert_to_seconds(track[1])}")
+        print(f"{track[0]} : {convert_to_seconds(track[1])}.")
     # Use the convert to seconds function. Convert main track to seconds.
     # track -= length of each track. 
     # Publish all to tracks folder.
@@ -191,6 +216,7 @@ def load_tracks(track_path: Path):
     """
 
     tracks = []
+    length = 0
 
     # clips = sorted(os.listdir(track_path))
     clips = sorted(os.listdir(track_path))
@@ -199,6 +225,12 @@ def load_tracks(track_path: Path):
         tracks.append(AudioSegment.from_file(track_path / clip))
 
     logger.info("Done loading tracks.")
+    for track in tracks:
+        length += track.duration_seconds
+
+    logger.info(f"{len(tracks)} Tracks found,"\
+        f"tracks length: {convert_to_humanreadable(length)}")
+
     return tracks
 
 def generate_track(track_len: int, tracks: list):
@@ -214,34 +246,74 @@ def generate_track(track_len: int, tracks: list):
         tracks (AudioSegment): return newly created sedment.
     """
 
-    logger.info(f"Pod length: {track_len:.2f}")
+    logger.info(f"Pod length: {convert_to_humanreadable(track_len)}")
 
     # Shuffle tracks for adding to the pod.
-    random.shuffle(tracks)
+    tmp_tracks = random.sample(tracks, len(tracks))
 
-    generated_track = AudioSegment.silent(duration=15000)
+    generated_track = AudioSegment.silent(duration=30000)
 
     # In a loop, pop tracks one at a time till sum <= track_len 
     while True:
         lens = []
-        for track in tracks:
+        for track in tmp_tracks:
             lens.append(track.duration_seconds)
 
         if sum(lens) >= track_len:
-            tracks.pop()
+            tmp_tracks.pop()
 
         else:
-            logger.info(f"Final Tracks length: {sum(lens):.2f}, Tracks left: {len(tracks)}")
+            logger.info(f"Final Tracks length: {convert_to_humanreadable(sum(lens))}"\
+                f" Tracks left: {len(tmp_tracks)}")
             break
 
     # Build track by adding upsegments!
-    for track in tracks:
+    for track in tmp_tracks:
         generated_track += track
 
     # reduce volume by 30dB
-    generated_track = generated_track - 35
+    generated_track = generated_track - float(CONFIG[SECTION]['db'])
 
     return generated_track
+
+def match_target_amplitude(sound, target_dBFS):
+    """
+    Adjust amplitude of soundtrack to given DB.
+
+    Args:
+        sound (audiosegment): Audio segment
+        target_dBFS (float): decibels you would like to set the track to.
+
+    Returns:
+        sound (audiosegment): modified Audio segment
+    """
+
+    change_in_dBFS = target_dBFS - sound.dBFS
+    return sound.apply_gain(change_in_dBFS)
+
+def normalize(tracks):
+    """
+    Normalize the loudness of all tracks to the lowest one.
+
+    Args:
+        tracks (list): List of audio segments
+
+    Returns:
+        (list): List of normalized audio segments
+    """
+    normalized_tracks = []
+    dbs = []
+
+    for track in tracks:
+        dbs.append(track.dBFS)
+
+    lowest = min(dbs)
+
+    for track in tracks:
+        normalized = match_target_amplitude(track, lowest)
+        normalized_tracks.append(normalized)
+
+    return normalized_tracks
 
 def process_logic():
     """
@@ -262,6 +334,11 @@ def process_logic():
     track_path = Path(Path.cwd()) / "data" / "napoleon" / "tracks"
     tracks = load_tracks(track_path)
 
+    # Normalize volumes of all tracks.
+    # Set the loudness level of all tracks to the quitest one.
+
+    normalized_tracks = normalize(tracks)
+
     # in a for loop:
     podcasts = sorted(os.listdir(pod_path))
     for pod in podcasts:
@@ -270,10 +347,11 @@ def process_logic():
         logger.info(f"Loading pod {pod}")
         loaded_pod = AudioSegment.from_file(pod_path / pod)
 
-        generated_track = generate_track(track_len=loaded_pod.duration_seconds, tracks=tracks)
+        generated_track = generate_track(track_len=loaded_pod.duration_seconds, tracks=normalized_tracks)
 
         overlay(loaded_pod, generated_track, out_path / pod)
 
+    logger.info("Done ##################")
     # Arrange all tracks in random order
     # get lengths and array them to fit inside ep.
     # Fade out on each end.

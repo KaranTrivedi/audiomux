@@ -6,7 +6,7 @@
 	],
 	"settings": {"logViewer.watch": [
         {
-            "title": "logs",
+            "title": "All",
             "pattern": "logs/*.log"
 		}
 	]}
