@@ -8,6 +8,7 @@ import configparser
 import json
 import logging
 import os
+import re
 import sys
 import random
 
@@ -30,6 +31,7 @@ logger = logging.getLogger(SECTION)
 
 pod_path = Path(Path.cwd()) / "data" / "napoleon" / "pod"
 edit_path = Path(Path.cwd()) / "data" / "napoleon" / "editted"
+out_path = Path(Path.cwd()) / "data" / "napoleon" / "out"
 
 def pool_extract():
     """
@@ -40,6 +42,73 @@ def pool_extract():
 
     with Pool(THREADS) as proc:
         print(proc.map(clip_audio, files))
+
+def convert_to_seconds(time):
+    """
+    Convert hour:mins:seconds format to seconds.
+
+    Args:
+        time (string): Give time in format dd:hh:mm:ss
+
+    Returns:
+        float: total seconds in given timestamp.
+    """
+
+    modifier = (1, 60, 3600, 86400)
+
+    times = [float(x) for x in time.split(":")][::-1]
+    seconds = [times[i]*modifier[i] for i in range(len(times))]
+
+    return sum(seconds)
+
+def find_tracks():
+
+    timestamps = """
+1. Richard Beddow - Napoleon Boneparte [0:01]
+2. Richard Beddow - Corsica, Humble Beginings [2:14] 
+3. Richard Beddow - Napoleon's Promise [3:19]
+4. Richard Birdsall - Preparing the Arcole charge [4:47] 
+5. Ian Livingstone - The Battle At Arcole [6:51]
+6. Richard Birdsall - Naval Battle At St. Vincent [8:50] 
+7. Richard Beddow - String Quintet I. Chamber Music I  [10:37]
+8. Richard Beddow - String Quintet I. Chamber Music II [11:25]
+9. Richard Beddow - String Quintet I. Chamber Music III [12:35]
+10. Richard Birdsall - String Quintet II. Chamber Music IV [13:56]
+11. Richard Beddow - Napoleon Heads to the East [14:44]
+12. Ian Livingstone - Planning the Alexandria Invasion [16:02]
+13. Richard Beddow - The Mamluks Attack [18:08]
+14. Simon Ravn - Desert Preparations [20:27]
+15. Richard Birdsall - The Battle of the Pyramids [22:29]
+16. Richard Beddow - From Egypt to France [24:34]
+17. Richard Beddow - The Art of War [25:17]
+18. Richard Beddow - Choral Music I. a Cappella  [26:58]
+19. Richard Birdsall - Choral Music II. a Cappella [27:43]
+20. Richard Beddow - Choral Music III. a Cappella [28:38]
+21. Ian Livingstone - Choral Music IV. a Cappella [29:38]
+22. Richard Beddow - Threat of Naval Conflict [30:28]
+23. Richard Beddow - HMS Victory [32:51]
+24. Richard Birdsall - The Napoleonic Code [35:11] 
+25. Simon Ravn - The Battle At Austerlitz [36:13]
+26. Ian Livingstone - Naval Strike At Aix Roads [38:08]
+27. Richard Birdsall - Napoleon's Ambition [40:21]
+28. Ian Livingstone - String Quintet II. Chamber Music I [40:59] 
+29. Ian Livingstone - String Quintet II. Chamber Music II [41:43]
+30. Ian Livingstone - String Quintet II. Chamber Music III [42:29]
+31. Richard Birdsall - String Quintet II. Chamber Music IV [43:17]
+32. Richard Birdsall - Napoleon Plans Waterloo [44:02]
+33. Richard Beddow - The Fields of War [46:24]
+34. Richard Birdsall - Waterloo [48:36]
+35. Simon Ravn - The Defeat At Waterloo [50:42] 
+36. Richard Beddow - The End [51:40]
+    """
+    pattern = "[0-9]\w+\. (.*-.*) \[(.*)\]"
+    tracks = re.findall(pattern, timestamps, re.MULTILINE)
+
+    for track in tracks:
+        print(f"{track[0]} : {convert_to_seconds(track[1])}")
+    # Use the convert to seconds function. Convert main track to seconds.
+    # track -= length of each track. 
+    # Publish all to tracks folder.
 
 def clip_audio(pod):
     """
@@ -123,6 +192,7 @@ def load_tracks(track_path: Path):
 
     tracks = []
 
+    # clips = sorted(os.listdir(track_path))
     clips = sorted(os.listdir(track_path))
 
     for clip in clips:
@@ -144,7 +214,7 @@ def generate_track(track_len: int, tracks: list):
         tracks (AudioSegment): return newly created sedment.
     """
 
-    logger.info(f"Pod length: {track_len}")
+    logger.info(f"Pod length: {track_len:.2f}")
 
     # Shuffle tracks for adding to the pod.
     random.shuffle(tracks)
@@ -161,18 +231,61 @@ def generate_track(track_len: int, tracks: list):
             tracks.pop()
 
         else:
-            logger.info(f"Final Tracks length: {sum(lens)}, Tracks left: {len(tracks)}")
+            logger.info(f"Final Tracks length: {sum(lens):.2f}, Tracks left: {len(tracks)}")
             break
 
     # Build track by adding upsegments!
     for track in tracks:
         generated_track += track
-    
+
     # reduce volume by 30dB
-    generated_track = generated_track - 30
+    generated_track = generated_track - 35
 
     return generated_track
 
+def process_logic():
+    """
+    ################################################################
+    ################################################################
+    ################################################################
+    process logic loop
+    ################################################################
+    ################################################################
+    ################################################################
+    """
+
+    # This step is now done.
+    # pool_extract(files)
+
+    logger.info("Starting ##############")
+    logger.info("Loading tracks.")
+    track_path = Path(Path.cwd()) / "data" / "napoleon" / "tracks"
+    tracks = load_tracks(track_path)
+
+    # in a for loop:
+    podcasts = sorted(os.listdir(pod_path))
+    for pod in podcasts:
+        # Find lengths of ep.
+
+        logger.info(f"Loading pod {pod}")
+        loaded_pod = AudioSegment.from_file(pod_path / pod)
+
+        generated_track = generate_track(track_len=loaded_pod.duration_seconds, tracks=tracks)
+
+        overlay(loaded_pod, generated_track, out_path / pod)
+
+    # Arrange all tracks in random order
+    # get lengths and array them to fit inside ep.
+    # Fade out on each end.
+
+    # print(audio.duration_seconds)
+    ################################################################
+    ################################################################
+    ################################################################
+    # Process logic
+    ################################################################
+    ################################################################
+    ################################################################
 def main():
     """
     Main function.
@@ -183,30 +296,13 @@ def main():
                     format='%(asctime)s::%(name)s::%(funcName)s::%(levelname)s::%(message)s',\
                     datefmt='%Y-%m-%d %H:%M:%S')
 
-    # This step is now done.
-    # pool_extract(files)
+    process_logic()
+    # find_tracks()
 
-    track_path = Path(Path.cwd()) / "data" / "napoleon" / "tracks"
-    tracks = load_tracks(track_path)
-
-    # in a for loop:
-    podcasts = sorted(os.listdir(pod_path))
-    for pod in podcasts:
-        # Find lengths of ep.
-
-        loaded_pod = AudioSegment.from_file(pod_path / pod)
-
-        generated_track = generate_track(track_len=loaded_pod.duration_seconds, tracks=tracks)
-
-        overlay(loaded_pod, generated_track, Path("/home") / "karan" / "q8ueato" / "pod" / pod)
-
-        sys.exit()
-
-    # Arrange all tracks in random order
-    # get lengths and array them to fit inside ep.
-    # Fade out on each end.
-
-    # print(audio.duration_seconds)
+    # Try to load one y axis.
+    # print(track_path / clips[0])
+    # print(AudioSegment.from_file(track_path / clips[0]).split_to_mono()[0])
+    # sys.exit()
 
 if __name__ == "__main__":
     main()
