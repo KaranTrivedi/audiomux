@@ -27,15 +27,17 @@ SECTION = "audiomux"
 THREADS = int(len(os.sched_getaffinity(0))/2)
 
 # TODO: Get file ready for git, use pod and editted folders for processing.
+# TODO: Deal with the issue of most of the track being empty if the last track in random array if longer than rest of the pod.
+# TODO: Parallel process to speed up there u can.
 
 logger = logging.getLogger(SECTION)
 
 # DEFINE PATHS HERE IN GIVEN FORMAT.
 # Uses current dir as base path so be careful.
 
-pod_path = Path(Path.cwd()) / "data" / "napoleon" / "pod"
-edit_path = Path(Path.cwd()) / "data" / "napoleon" / "editted"
-out_path = Path(Path.cwd()) / "data" / "napoleon" / "out"
+pod_path = Path(Path.cwd()) / "data" / CONFIG[SECTION]['folder'] / "pod"
+edit_path = Path(Path.cwd()) / "data" / CONFIG[SECTION]['folder'] / "editted"
+out_path = Path(Path.cwd()) / "data" / CONFIG[SECTION]['folder'] / "out"
 
 def pool_extract():
     """
@@ -126,11 +128,12 @@ def find_tracks():
 35. Simon Ravn - The Defeat At Waterloo [50:42] 
 36. Richard Beddow - The End [51:40]
     """
-    pattern = "[0-9]\w+\. (.*-.*) \[(.*)\]"
+
+    pattern = r"[0-9]\w+\. (.*-.*) \[(.*)\]"
     tracks = re.findall(pattern, timestamps, re.MULTILINE)
 
     for track in tracks:
-        print(f"{track[0]} : {convert_to_seconds(track[1])}.")
+        logger.info(f"{track[0]} : {convert_to_seconds(track[1])}.")
     # Use the convert to seconds function. Convert main track to seconds.
     # track -= length of each track. 
     # Publish all to tracks folder.
@@ -228,12 +231,12 @@ def load_tracks(track_path: Path):
     for track in tracks:
         length += track.duration_seconds
 
-    logger.info(f"{len(tracks)} Tracks found,"\
+    logger.info(f"{len(tracks)} Tracks found, "\
         f"tracks length: {convert_to_humanreadable(length)}")
 
     return tracks
 
-def generate_track(track_len: int, tracks: list):
+def generate_track(track_len: int, track_dBFS: float, tracks: list):
     """
     Generate from given set of overlay track a new track thats smaller than
     or equal to the given pod.
@@ -255,6 +258,11 @@ def generate_track(track_len: int, tracks: list):
 
     # In a loop, pop tracks one at a time till sum <= track_len 
     while True:
+        # If there is only 1 track, no point in shuffling and adding.
+        if len(tmp_tracks) == 1:
+            logger.info(f"Track length: {convert_to_humanreadable(tmp_tracks[0].duration_seconds)}")
+            break
+
         lens = []
         for track in tmp_tracks:
             lens.append(track.duration_seconds)
@@ -271,8 +279,16 @@ def generate_track(track_len: int, tracks: list):
     for track in tmp_tracks:
         generated_track += track
 
-    # reduce volume by 30dB
-    generated_track = generated_track - float(CONFIG[SECTION]['db'])
+    # reduce volume by configured dB, below main audio.
+    loudness = track_dBFS - float(CONFIG[SECTION]['db'])
+
+    logger.debug(f"Track loudness: {generated_track.dBFS:.3f}, "\
+        f"Pod loudness: {track_dBFS:.3f}")
+    logger.debug(f"Target loudness: {loudness:.3f}, "\
+        f"Lower by: {float(CONFIG[SECTION]['db']):.3f}")
+
+    generated_track = match_target_amplitude(generated_track, loudness)
+    logger.debug(f"New Track loudness: {generated_track.dBFS:.3f}")
 
     return generated_track
 
@@ -285,15 +301,19 @@ def match_target_amplitude(sound, target_dBFS):
         target_dBFS (float): decibels you would like to set the track to.
 
     Returns:
-        sound (audiosegment): modified Audio segment
+        (audiosegment): modified Audio segment
     """
 
     change_in_dBFS = target_dBFS - sound.dBFS
-    return sound.apply_gain(change_in_dBFS)
+    logger.debug(f"Track loudness: {sound.dBFS}, Expected: {target_dBFS}")
+    sound = sound.apply_gain(change_in_dBFS)
+    logger.debug(f"New Track loudness: {sound.dBFS}")
+
+    return sound
 
 def normalize(tracks):
     """
-    Normalize the loudness of all tracks to the lowest one.
+    Normalize the loudness of all tracks to the quitest one.
 
     Args:
         tracks (list): List of audio segments
@@ -308,9 +328,12 @@ def normalize(tracks):
         dbs.append(track.dBFS)
 
     lowest = min(dbs)
+    logger.debug(f"Quitest track at: {lowest}")
 
     for track in tracks:
+        logger.debug(f"Track loudness: {track.dBFS}")
         normalized = match_target_amplitude(track, lowest)
+        logger.debug(f"Track Normalized: {normalized.dBFS}")
         normalized_tracks.append(normalized)
 
     return normalized_tracks
@@ -329,29 +352,34 @@ def process_logic():
     # This step is now done.
     # pool_extract(files)
 
-    logger.info("Starting ##############")
+    logger.info("Starting #########################################")
+
     logger.info("Loading tracks.")
-    track_path = Path(Path.cwd()) / "data" / "napoleon" / "tracks"
+    track_path = Path(Path.cwd()) / "data" / CONFIG[SECTION]['folder'] / "tracks"
     tracks = load_tracks(track_path)
 
-    # Normalize volumes of all tracks.
-    # Set the loudness level of all tracks to the quitest one.
-
+    logger.info("Normalizing track volumes.")
     normalized_tracks = normalize(tracks)
 
+    # Loading pods.
     # in a for loop:
     podcasts = sorted(os.listdir(pod_path))
+
     for pod in podcasts:
         # Find lengths of ep.
 
         logger.info(f"Loading pod {pod}")
         loaded_pod = AudioSegment.from_file(pod_path / pod)
+        logger.info(f"Pod loudness: {loaded_pod.dBFS}")
 
-        generated_track = generate_track(track_len=loaded_pod.duration_seconds, tracks=normalized_tracks)
+        generated_track = generate_track(track_len=loaded_pod.duration_seconds,\
+            track_dBFS=loaded_pod.dBFS,\
+            tracks=normalized_tracks)
 
         overlay(loaded_pod, generated_track, out_path / pod)
 
-    logger.info("Done ##################")
+    logger.info("Done #########################################")
+
     # Arrange all tracks in random order
     # get lengths and array them to fit inside ep.
     # Fade out on each end.
@@ -364,6 +392,7 @@ def process_logic():
     ################################################################
     ################################################################
     ################################################################
+
 def main():
     """
     Main function.
@@ -371,7 +400,7 @@ def main():
 
     logging.basicConfig(filename=CONFIG[SECTION]['log'],\
                     level=CONFIG[SECTION]['level'],\
-                    format='%(asctime)s::%(name)s::%(funcName)s::%(levelname)s::%(message)s',\
+                    format='%(asctime)s::%(levelname)s::%(name)s::%(funcName)s::%(message)s',\
                     datefmt='%Y-%m-%d %H:%M:%S')
 
     process_logic()
