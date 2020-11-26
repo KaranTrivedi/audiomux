@@ -28,7 +28,11 @@ THREADS = int(len(os.sched_getaffinity(0))/2)
 
 # TODO: Get file ready for git, use pod and editted folders for processing.
 # TODO: Deal with the issue of most of the track being empty if the last track in random array if longer than rest of the pod.
-# TODO: Parallel process to speed up there u can.
+# TODO: Parallel process to speed up output.
+
+# TODO: Advanced: Increase overlay audio where pod is quite. 
+# TODO: Advanced: Remove repeating segments like intro/outro etc.
+# TODO: Advanced: Fade in and fade out tracks.
 
 logger = logging.getLogger(SECTION)
 
@@ -239,10 +243,10 @@ def load_tracks(track_path: Path):
 def generate_track(track_len: int, track_dBFS: float, tracks: list):
     """
     Generate from given set of overlay track a new track thats smaller than
-    or equal to the given pod.
+    or equal to the given podcast.
 
     Args:
-        track_len (int): expected length of pod.
+        track_len (int): expected length of podcast.
         tracks (list): 
 
     Returns:
@@ -361,16 +365,16 @@ def process_logic():
     logger.info("Normalizing track volumes.")
     normalized_tracks = normalize(tracks)
 
-    # Loading pods.
-    # in a for loop:
+    # Get list of podcasts
     podcasts = sorted(os.listdir(pod_path))
 
     for pod in podcasts:
         # Find lengths of ep.
 
-        logger.info(f"Loading pod {pod}")
+        logger.info("----------------------")
+        logger.info(f"Loading: {pod}")
         loaded_pod = AudioSegment.from_file(pod_path / pod)
-        logger.info(f"Pod loudness: {loaded_pod.dBFS}")
+        logger.debug(f"Podcast loudness: {loaded_pod.dBFS}")
 
         generated_track = generate_track(track_len=loaded_pod.duration_seconds,\
             track_dBFS=loaded_pod.dBFS,\
